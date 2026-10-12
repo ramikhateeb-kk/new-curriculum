@@ -1,0 +1,169 @@
+-- ==============================================================================
+-- Jordan Curriculum Database Schema (Supabase PostgreSQL)
+-- Updated with Specializations (التخصص), Hijri Academic Calendar, and Trial Teacher Limits
+-- ==============================================================================
+
+-- 1. جدول التقويم المدرسي والعام الهجري
+CREATE TABLE IF NOT EXISTS academic_calendar (
+    id SERIAL PRIMARY KEY,
+    year1 INTEGER NOT NULL,                       -- السنة الميلادية الأولى (مثال: 2026)
+    hijri_year TEXT NOT NULL,                     -- التاريخ الهجري للعام الدراسي (مثال: 1447 - 1448 هـ)
+    sem1_start DATE NOT NULL,
+    sem1_end DATE NOT NULL,
+    sem2_start DATE NOT NULL,
+    sem2_end DATE NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 2. جدول التخصصات والفروع (خاص بالصفوف العاشر والحادي عشر والثاني عشر)
+CREATE TABLE IF NOT EXISTS specializations (
+    id BIGSERIAL PRIMARY KEY,
+    grade INTEGER NOT NULL CHECK (grade IN (10, 11, 12)),
+    name TEXT NOT NULL,                           -- اسم التخصص (مثال: هندسي، زراعي، علمي، أدبي، مهارات رقمية BTEC)
+    code TEXT NOT NULL,                           -- رمز التخصص (مثال: ENG, AGR, SCI, LIT)
+    description TEXT,
+    is_active BOOLEAN DEFAULT TRUE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 3. جدول الكتب والمناهج المدرسية (معدل لدعم التخصصات والمناهج المشتركة)
+CREATE TABLE IF NOT EXISTS books (
+    id BIGSERIAL PRIMARY KEY,
+    grade INTEGER NOT NULL,                       -- 1 إلى 12
+    semester INTEGER NOT NULL CHECK (semester IN (1, 2)),
+    subject TEXT NOT NULL,                        -- اسم المبحث
+    slug TEXT NOT NULL UNIQUE,
+    pdf_url TEXT,
+    page_offset INTEGER NOT NULL DEFAULT 0,
+    units JSONB NOT NULL DEFAULT '[]'::jsonb,
+    is_shared BOOLEAN DEFAULT TRUE,               -- هل المنهاج مشترك لجميع التخصصات (مثل المهارات الرقمية)
+    specialization_id BIGINT REFERENCES specializations(id) ON DELETE SET NULL, -- تخصص محدد إن وجد
+    specialization_code TEXT,                     -- كود التخصص (مثل 'ALL' للمشترك، أو 'ENG' للهندسي، إلخ)
+    language TEXT DEFAULT 'ar' CHECK (language IN ('ar', 'en')), -- لغة المبحث (ar / en)
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 4. جدول المستخدمين (معدل لدعم التخصص والشعبة والحسابات التجريبية)
+CREATE TABLE IF NOT EXISTS users (
+    id BIGSERIAL PRIMARY KEY,
+    name TEXT NOT NULL,
+    phone TEXT NOT NULL UNIQUE,
+    email TEXT,
+    password_hash TEXT NOT NULL,
+    role TEXT NOT NULL CHECK (role IN ('student', 'teacher', 'supervisor', 'admin')),
+    status TEXT NOT NULL DEFAULT 'active',
+    grade INTEGER,                                -- الصف الدراسي
+    specialization TEXT,                          -- التخصص (للصفوف 10، 11، 12)
+    specialization_id BIGINT REFERENCES specializations(id) ON DELETE SET NULL,
+    division TEXT,                                -- الشعبة (مثال: شعبة أ، شعبة ب)
+    school_name TEXT,                             -- اسم المدرسة
+    directorate TEXT,                               -- مديرية التربية والتعليم
+    is_trial BOOLEAN DEFAULT FALSE,               -- هل الحساب تجريبي للمعلم (صلاحيات ومخرجات محدودة)
+    trial_plans_used INTEGER DEFAULT 0,           -- عدد خطط الدروس المنشأة تجريبياً (الحد الأقصى: 1)
+    trial_semester_plans_used INTEGER DEFAULT 0,  -- عدد الخطط الفصلية المنشأة تجريبياً
+    subscription_end DATE,
+    session_token TEXT,
+    session_created_at TIMESTAMP WITH TIME ZONE,
+    requested_subjects JSONB,
+    approved_by BIGINT REFERENCES users(id),
+    approved_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 5. جدول خطط الدروس اليومية
+CREATE TABLE IF NOT EXISTS lesson_plans (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL,
+    page_start INTEGER NOT NULL,
+    page_end INTEGER NOT NULL,
+    data JSONB NOT NULL,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 6. جدول الخطط الفصلية
+CREATE TABLE IF NOT EXISTS semester_plans (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL,
+    data JSONB NOT NULL,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 7. جدول تحليل المحتوى
+CREATE TABLE IF NOT EXISTS content_analysis (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL,
+    data JSONB NOT NULL,
+    created_by BIGINT REFERENCES users(id),
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 8. جدول بنك الأسئلة
+CREATE TABLE IF NOT EXISTS questions (
+    id BIGSERIAL PRIMARY KEY,
+    slug TEXT NOT NULL,
+    page_start INTEGER NOT NULL,
+    page_end INTEGER NOT NULL,
+    qtype TEXT NOT NULL,
+    data JSONB NOT NULL,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- 9. جدول حدود الاستخدام اليومي
+CREATE TABLE IF NOT EXISTS daily_usage (
+    user_id BIGINT REFERENCES users(id) ON DELETE CASCADE,
+    usage_day DATE NOT NULL,
+    count INTEGER NOT NULL DEFAULT 0,
+    PRIMARY KEY (user_id, usage_day)
+);
+
+-- 10. جدول حدود الأدوار
+CREATE TABLE IF NOT EXISTS role_limits (
+    role TEXT PRIMARY KEY,
+    daily_limit INTEGER NOT NULL
+);
+
+-- ==============================================================================
+-- أمثلة على البيانات الأولية للتخصصات والتقويم (Jordan Ministry Curriculum Initial Data)
+-- ==============================================================================
+
+INSERT INTO role_limits (role, daily_limit) VALUES
+('student', 8),
+('teacher', 25),
+('supervisor', 50),
+('admin', 999)
+ON CONFLICT (role) DO NOTHING;
+
+-- تخصصات الصف العاشر
+INSERT INTO specializations (grade, name, code, description) VALUES
+(10, 'هندسي (BTEC)', 'ENG', 'المسار المهني والتقني الهندسي'),
+(10, 'تكنولوجيا المعلومات (BTEC)', 'IT', 'مسار تكنولوجيا المعلومات البرمجة والشبكات'),
+(10, 'إدارة الأعمال (BTEC)', 'BUS', 'مسار إدارة الأعمال والمالية'),
+(10, 'زراعي', 'AGR', 'المسار المهني الزراعي'),
+(10, 'عام وأكاديمي', 'ACAD', 'المسار الأكاديمي العام')
+ON CONFLICT DO NOTHING;
+
+-- تخصصات الصف الحادي عشر
+INSERT INTO specializations (grade, name, code, description) VALUES
+(11, 'علمي', 'SCI', 'الفرع العلمي - رياضيات وفيزياء وكيمياء وأحياء'),
+(11, 'أدبي', 'LIT', 'الفرع الأدبي - لغة عربية ودراسات تاريخية وجغرافية'),
+(11, 'هندسي (BTEC)', 'ENG', 'المسار الهندسي - الصف الحادي عشر'),
+(11, 'زراعي', 'AGR', 'الفرع الزراعي - إنتاج نباتي وحيواني'),
+(11, 'صناعي', 'IND', 'الفرع الصناعي المهني')
+ON CONFLICT DO NOTHING;
+
+-- تخصصات الصف الثاني عشر (التوجيهي)
+INSERT INTO specializations (grade, name, code, description) VALUES
+(12, 'علمي', 'SCI', 'فرع العلوم والتكنولوجيا'),
+(12, 'أدبي', 'LIT', 'فرع الآداب والإنسانيات'),
+(12, 'صناعي', 'IND', 'الفرع الصناعي المهني'),
+(12, 'زراعي', 'AGR', 'الفرع الزراعي المهني'),
+(12, 'هندسي (BTEC)', 'ENG', 'المسار الهندسي التقني'),
+(12, 'فندقي وسياحي', 'HOSP', 'الفرع الفندقي والسياحي')
+ON CONFLICT DO NOTHING;
+
+-- التقويم المدرسي والعام الهجري الافتراضي
+INSERT INTO academic_calendar (year1, hijri_year, sem1_start, sem1_end, sem2_start, sem2_end) VALUES
+(2026, '1447 - 1448 هـ', '2026-08-25', '2027-01-14', '2027-02-01', '2027-06-25')
+ON CONFLICT DO NOTHING;
